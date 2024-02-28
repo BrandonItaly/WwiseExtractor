@@ -1,8 +1,9 @@
-﻿using System.Diagnostics;
-using System.Xml;
-using System.Text.RegularExpressions;
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
+using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.Xml;
 
 namespace WwiseExtractor
 {
@@ -58,75 +59,70 @@ namespace WwiseExtractor
             XmlDocument xmlDocument = new();
             xmlDocument.Load(soundbanksInfoPath);
 
-            XmlNodeList soundBankPaths = xmlDocument.SelectNodes("//SoundBank/Path");
-            foreach (XmlNode soundBankPath in soundBankPaths)
+            XmlNodeList soundBanks = xmlDocument.SelectNodes("//SoundBank");
+            List<Task> extractionTasks = new List<Task>();
+
+            foreach (XmlNode soundBank in soundBanks)
             {
-                string soundBankFilePath = Path.Combine(wwiseDirectory, soundBankPath.InnerText);
-                RunCommand(bnkextrPath, $"{soundBankFilePath} /nodir");
+                string filePath = soundBank["Path"].InnerText;
+                string sourcePath = Path.Combine(wwiseDirectory, filePath);
+    
+                extractionTasks.Add(Task.Run(() => RunCommand(bnkextrPath, $"{sourcePath} /nodir")));
             }
+
+            Task.WaitAll(extractionTasks.ToArray());
 
             // Read data from ExtractedAudio.json
             string originalExtractedAudio = File.Exists(jsonFilePath) ? File.ReadAllText(jsonFilePath) : string.Empty;
             List<AudioFileInfo> audioFileInfoList = JsonConvert.DeserializeObject<List<AudioFileInfo>>(originalExtractedAudio) ?? new List<AudioFileInfo>();
 
             Console.WriteLine("Moving WEM files...");
-            HashSet<string> processedFiles = new();
-            List<AudioFileInfo> audioFiles = new();
+            HashSet<string> processedFiles = new HashSet<string>();
+            List<AudioFileInfo> audioFiles = new List<AudioFileInfo>();
+
             XmlNodeList files = xmlDocument.SelectNodes("//File");
             foreach (XmlNode file in files)
             {
-                if (file["Path"] != null)
+                if (file["Path"] == null) continue;
+
+                string fileId = file.Attributes["Id"].Value;
+                string filePath = Regex.Replace(file["Path"].InnerText, "_[0-9A-F]+\\.wem$", ".wem");
+                string language = file.Attributes["Language"]?.Value ?? "SFX";
+                string destination = Path.Combine(outputDirectory, filePath);
+                string sourcePath = Path.Combine(wwiseDirectory, language != "SFX" ? language : "", fileId + ".wem");
+
+                if (processedFiles.Contains(filePath))
                 {
-                    string fileId = file.Attributes["Id"].Value;
-                    string filePath = Regex.Replace(file["Path"].InnerText, "_[0-9A-F]+\\.wem$", ".wem");
-                    string language = file.Attributes["Language"]?.Value ?? "SFX";
-                    string destination = Path.Combine(outputDirectory, filePath);
-                    string sourcePath = Path.Combine(wwiseDirectory, language != "SFX" ? language : "", fileId + ".wem");
-
-                    // Check if the file has already been processed
-                    if (processedFiles.Contains(filePath))
-                    {
+                    if (File.Exists(sourcePath))
                         File.Delete(sourcePath);
-                        continue;
-                    }
-
-                    AudioFileInfo audioFileInfo = new()
-                    {
-                        FileId = fileId,
-                        FilePath = filePath,
-                        FileHash = CalculateFileHash(sourcePath)
-                    };
-
-                    audioFiles.Add(audioFileInfo);
-
-                    bool shouldMove = true;
-
-                    // Check if file hashes are identical
-                    AudioFileInfo matchingAudioFile = audioFileInfoList.FirstOrDefault(audioFile => audioFile.FilePath == filePath);
-                    if (matchingAudioFile != null && matchingAudioFile.FileHash == CalculateFileHash(sourcePath))
-                    {
-                        shouldMove = false;
-                    }
-
-                    // Check if the corresponding .ogg file exists
-                    string oggFilePath = Path.ChangeExtension(destination, ".ogg");
-                    if (!File.Exists(oggFilePath))
-                    {
-                        shouldMove = true;
-                    }
-
-                    if (shouldMove)
-                    {
-                        Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                        MoveFile(sourcePath, destination);
-                        Console.WriteLine($"Moved {filePath}");
-                    }
-
-                    File.Delete(sourcePath);
-
-                    // Add the file to the processed set
-                    processedFiles.Add(filePath);
+                    continue;
                 }
+
+                string fileHash = CalculateFileHash(sourcePath);
+                bool shouldMove = true;
+
+                AudioFileInfo matchingAudioFile = audioFileInfoList.FirstOrDefault(audioFile => audioFile.FilePath == filePath && audioFile.FileHash == fileHash);
+                if (matchingAudioFile != null || File.Exists(Path.ChangeExtension(destination, ".ogg")))
+                {
+                    shouldMove = false;
+                }
+
+                if (shouldMove)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                    MoveFile(sourcePath, destination);
+                    Console.WriteLine($"Moved {filePath}");
+                }
+
+                File.Delete(sourcePath);
+                processedFiles.Add(filePath);
+
+                audioFiles.Add(new AudioFileInfo
+                {
+                    FileId = fileId,
+                    FilePath = filePath,
+                    FileHash = fileHash
+                });
             }
 
             Directory.CreateDirectory(unknownDirectory);
@@ -145,7 +141,7 @@ namespace WwiseExtractor
             File.WriteAllText(jsonFilePath, jsonData);
             Console.WriteLine($"{jsonFilePath} created sucessfully.");
 
-            CleanupFiles(outputDirectory, pakMountPoint);
+            Directory.Delete(pakMountPoint, true);
 
             Console.WriteLine("Sound extraction completed!");
         }
@@ -223,7 +219,13 @@ namespace WwiseExtractor
         static void ExtractPakChunk(string pakFilePath)
         {
             string extractPath = @"../../../";
-            RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Extract \"{extractPath}\" -extracttomountpoint");
+            Task[] extractionTasks = new Task[]
+            {
+                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.bnk -Extract \"{extractPath}\" -extracttomountpoint")),
+                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.wem -Extract \"{extractPath}\" -extracttomountpoint")),
+                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.xml -Extract \"{extractPath}\" -extracttomountpoint"))
+            };
+            Task.WaitAll(extractionTasks);
         }
 
         static void MoveFile(string source, string destination)
@@ -237,36 +239,27 @@ namespace WwiseExtractor
         static void ConvertAndCompress(string outputDirectory)
         {
             var wemFiles = Directory.EnumerateFiles(outputDirectory, "*.wem", SearchOption.AllDirectories);
-            Parallel.ForEach(wemFiles, file =>
-            {
-                RunCommand(ww2oggPath, $"\"{file}\" --pcb \"{packedCodebooksPath}\"");
-            });
 
             Parallel.ForEach(wemFiles, file =>
             {
                 string oggFilePath = Path.ChangeExtension(file, ".ogg");
+
+                // Convert .wem to .ogg using ww2ogg
+                RunCommand(ww2oggPath, $"\"{file}\" --pcb \"{packedCodebooksPath}\"");
+
+                // Check if .ogg file was created successfully
                 if (File.Exists(oggFilePath))
                 {
-                    Console.WriteLine($"Compressing {oggFilePath}");
+                    // Compress .ogg using revorb
                     RunCommand(revorbPath, $"\"{oggFilePath}\"");
                 }
+
+                // Delete .wem file
+                File.Delete(file);
             });
         }
 
-        static void CleanupFiles(string outputDirectory, string pakMountPoint)
-        {
-            foreach (string file in Directory.EnumerateFiles(outputDirectory, "*.wem", SearchOption.AllDirectories))
-            {
-                File.Delete(file);
-            }
-
-            if (Directory.Exists(pakMountPoint))
-            {
-                Directory.Delete(pakMountPoint, true);
-            }
-        }
-
-        static void RunCommand(string filePath, string arguments)
+        static async Task RunCommand(string filePath, string arguments)
         {
             var startInfo = new ProcessStartInfo
             {
