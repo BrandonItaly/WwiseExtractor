@@ -194,8 +194,8 @@ namespace WwiseExtractor
         {
             // Default file paths
             string[] defaultPaths = {
-                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk1-WindowsNoEditor.pak",
-                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk2-WindowsNoEditor.pak"
+                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk1-Windows.pak",
+                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk2-Windows.pak"
             };
 
             // Prompt the user for pak file paths
