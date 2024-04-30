@@ -9,11 +9,12 @@ namespace WwiseExtractor
 {
     class Program
     {
-        static readonly string unrealPakPath = @"Engine\Binaries\Win64\UnrealPak.exe";
-        static readonly string bnkextrPath = @"Engine\bnkextr.exe";
-        static readonly string revorbPath = @"Engine\revorb.exe";
-        static readonly string ww2oggPath = @"Engine\ww2ogg\ww2ogg.exe";
-        static readonly string packedCodebooksPath = @"Engine\ww2ogg\packed_codebooks_aoTuV_603.bin";
+        static readonly string quickbmsPath = @"Binaries\quickbms\quickbms_4gb_files.exe";
+        static readonly string bmsScriptPath = @"Binaries\quickbms\unreal_tournament_4_0.4.27e_dead_by_daylight.bms";
+        static readonly string bnkextrPath = @"Binaries\bnkextr.exe";
+        static readonly string revorbPath = @"Binaries\revorb.exe";
+        static readonly string ww2oggPath = @"Binaries\ww2ogg\ww2ogg.exe";
+        static readonly string packedCodebooksPath = @"Binaries\ww2ogg\packed_codebooks_aoTuV_603.bin";
         static readonly string configPath = "config.json";
         static readonly string jsonFilePath = "ExtractedAudio.json";
 
@@ -35,6 +36,7 @@ namespace WwiseExtractor
             string wwiseDirectory = config.WwiseDirectory ?? @"WwiseAudio\Windows";
             string outputDirectory = config.OutputDirectory ?? "Output";
             string unknownDirectory = Path.Combine(outputDirectory, "Wwise Unknown Audio");
+            bool truncateFileNames = config.TruncateFileNames ?? true;
 
             Console.Write("Press Enter to begin audio extraction...");
             Console.ReadLine();
@@ -86,7 +88,7 @@ namespace WwiseExtractor
                 if (file["Path"] == null) continue;
 
                 string fileId = file.Attributes["Id"].Value;
-                string filePath = Regex.Replace(file["Path"].InnerText, "_[0-9A-F]+\\.wem$", ".wem");
+                string filePath = truncateFileNames ? Regex.Replace(file["Path"].InnerText, "_[0-9A-F]+\\.wem$", ".wem") : file["Path"].InnerText;
                 string language = file.Attributes["Language"]?.Value ?? "SFX";
                 string destination = Path.Combine(outputDirectory, filePath);
                 string sourcePath = Path.Combine(wwiseDirectory, language != "SFX" ? language : "", fileId + ".wem");
@@ -171,7 +173,8 @@ namespace WwiseExtractor
                     PakFilePaths = GetPakFilePaths(),
                     PakMountPoint = GetPakMountPoint(),
                     WwiseDirectory = GetWwiseDirectory(),
-                    OutputDirectory = GetOutputDirectory()
+                    OutputDirectory = GetOutputDirectory(),
+                    TruncateFileNames = true
                 };
 
                 string json = JsonConvert.SerializeObject(config, Newtonsoft.Json.Formatting.Indented);
@@ -189,9 +192,17 @@ namespace WwiseExtractor
 
         static string[] GetPakFilePaths()
         {
+            // Default file paths
+            string[] defaultPaths = {
+                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk1-WindowsNoEditor.pak",
+                @"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks\pakchunk2-WindowsNoEditor.pak"
+            };
+
             // Prompt the user for pak file paths
             Console.WriteLine("Enter pak file paths (comma-separated):");
             string input = Console.ReadLine();
+
+            if (string.IsNullOrEmpty(input)) input = string.Join(",", defaultPaths);
             return input.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(path => path.TrimStart()).ToArray();
         }
 
@@ -199,31 +210,37 @@ namespace WwiseExtractor
         {
             // Prompt the user for pak mount point
             Console.WriteLine("Enter pak file mount point (ex. \"DeadByDaylight\"):");
-            return Console.ReadLine();
+            string input = Console.ReadLine();
+
+            if (string.IsNullOrEmpty(input)) input = "DeadByDaylight";
+            return input;
         }
 
         static string GetWwiseDirectory()
         {
             // Prompt the user for Wwise directory
             Console.WriteLine("Enter WwiseAudio directory (ex. \"DeadByDaylight\\Content\\WwiseAudio\\Windows\"):");
-            return Console.ReadLine() ?? @"WwiseAudio\Windows";
+            string input = Console.ReadLine();
+
+            if (string.IsNullOrEmpty(input)) input = @"WwiseAudio\Windows";
+            return input;
         }
 
         static string GetOutputDirectory()
         {
             // Prompt the user for output directory
             Console.WriteLine("Enter output directory:");
-            return Console.ReadLine() ?? "Output";
+            string input = Console.ReadLine();
+            
+            if (string.IsNullOrEmpty(input)) input = "Output";
+            return input;
         }
 
         static void ExtractPakChunk(string pakFilePath)
         {
-            string extractPath = @"../../../";
             Task[] extractionTasks = new Task[]
             {
-                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.bnk -Extract \"{extractPath}\" -extracttomountpoint")),
-                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.wem -Extract \"{extractPath}\" -extracttomountpoint")),
-                Task.Run(() => RunCommand(unrealPakPath, $"\"{pakFilePath}\" -Filter=*.xml -Extract \"{extractPath}\" -extracttomountpoint"))
+                Task.Run(() => RunCommand(quickbmsPath, $"\"{bmsScriptPath}\" \"{pakFilePath}\""))
             };
             Task.WaitAll(extractionTasks);
         }
@@ -292,6 +309,7 @@ namespace WwiseExtractor
         public string? PakMountPoint { get; set; }
         public string? WwiseDirectory { get; set; }
         public string? OutputDirectory { get; set; }
+        public bool? TruncateFileNames { get; set; }
     }
 
     class AudioFileInfo
